@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎲 Авто-казино для друзей</title>
+    <title>🎲 Реальное онлайн-казино</title>
     <style>
         body {
             font-family: 'Arial', sans-serif;
@@ -122,34 +122,33 @@
             color: #fbbf24;
         }
         
-        #waitingPlayers {
-            margin-top: 15px;
+        .disconnected {
+            color: #f87171;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🎲 Авто-казино для друзей</h1>
+        <h1>🎲 Реальное онлайн-казино</h1>
         
         <div class="lobby" id="lobby">
             <input type="text" id="playerName" placeholder="Ваше имя">
-            <button id="joinQueue">Найти игру</button>
+            <button id="joinGame">Начать игру</button>
             <div id="connectionStatus" class="connection-status">Не подключено</div>
-            <div id="waitingPlayers">Ожидающих игроков: <span id="playersCount">0</span></div>
         </div>
         
         <div id="gameContent" style="display: none;">
             <div class="game-area">
                 <div class="player" id="player1">
                     <h2 id="player1Name">Игрок 1</h2>
-                    <div class="dice">🎲</div>
+                    <div class="dice" id="dice1">🎲</div>
                     <p>Очки: <span class="score" id="score1">0</span></p>
                     <button id="roll1">Бросить кости</button>
                 </div>
                 
                 <div class="player" id="player2">
                     <h2 id="player2Name">Игрок 2</h2>
-                    <div class="dice">🎲</div>
+                    <div class="dice" id="dice2">🎲</div>
                     <p>Очки: <span class="score" id="score2">0</span></p>
                     <button id="roll2">Бросить кости</button>
                 </div>
@@ -157,8 +156,7 @@
             
             <div class="scoreboard">
                 <h2>Статистика</h2>
-                <p>Побед: <span id="player1NameShort"></span> - <span id="wins1">0</span> | 
-                <span id="player2NameShort"></span> - <span id="wins2">0</span></p>
+                <p>Побед: <span id="player1Wins">0</span> - <span id="player2Wins">0</span></p>
                 <button id="newGame">Новая игра</button>
                 <button id="leaveGame">Покинуть игру</button>
             </div>
@@ -171,238 +169,165 @@
     </div>
 
     <script>
-        // Игровые переменные
-        let playerId = Math.random().toString(36).substr(2, 9);
-        let playerName = "";
-        let gameId = "";
-        let isHost = false;
-        let currentPlayerTurn = "";
-        let gameActive = false;
-        let scores = { player1: 0, player2: 0 };
-        let wins = { player1: 0, player2: 0 };
-        let players = { player1: null, player2: null };
-        let socket = null;
-        let queueCount = 0;
+        // WebSocket соединение
+        const socket = new WebSocket(`ws://${window.location.hostname}:3000`);
+        let playerId = null;
+        let currentGame = null;
+        let playerIndex = null;
         
         // Элементы DOM
-        const playerNameInput = document.getElementById('playerName');
-        const joinQueueBtn = document.getElementById('joinQueue');
-        const connectionStatus = document.getElementById('connectionStatus');
-        const gameContent = document.getElementById('gameContent');
         const lobby = document.getElementById('lobby');
-        const playersCountElement = document.getElementById('playersCount');
+        const gameContent = document.getElementById('gameContent');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const playerNameInput = document.getElementById('playerName');
+        const joinGameBtn = document.getElementById('joinGame');
         
         // Слушатели событий
-        joinQueueBtn.addEventListener('click', joinQueue);
-        document.getElementById('roll1').addEventListener('click', () => rollDice('player1'));
-        document.getElementById('roll2').addEventListener('click', () => rollDice('player2'));
+        joinGameBtn.addEventListener('click', joinGame);
+        document.getElementById('roll1').addEventListener('click', () => rollDice());
+        document.getElementById('roll2').addEventListener('click', () => rollDice());
         document.getElementById('newGame').addEventListener('click', startNewGame);
         document.getElementById('leaveGame').addEventListener('click', leaveGame);
         
-        // Подключиться к очереди
-        function joinQueue() {
-            playerName = playerNameInput.value.trim() || "Игрок " + Math.floor(Math.random() * 100);
+        // Обработчики WebSocket
+        socket.onopen = () => {
+            updateConnectionStatus("Подключено к серверу", "connected");
+        };
+        
+        socket.onclose = () => {
+            updateConnectionStatus("Отключено от сервера", "disconnected");
+            resetToLobby();
+        };
+        
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            handleMessage(data);
+        };
+        
+        // Функции
+        function joinGame() {
+            const name = playerNameInput.value.trim() || "Игрок " + Math.floor(Math.random() * 100);
             
-            // Имитируем подключение к серверу
-            updateConnectionStatus("Ищем соперника...", false);
+            socket.send(JSON.stringify({
+                type: 'REGISTER',
+                name
+            }));
             
-            // В реальной реализации здесь было бы WebSocket подключение
-            // Для демонстрации используем setTimeout
-            setTimeout(() => {
-                // 50% шанс стать хостом
-                isHost = Math.random() > 0.5;
-                gameId = "demo-" + Math.random().toString(36).substr(2, 6);
-                
-                if (isHost) {
-                    // Создаем новую игру
-                    players.player1 = { id: playerId, name: playerName, score: 0 };
-                    updateConnectionStatus("Ожидаем второго игрока...", false);
-                } else {
-                    // Присоединяемся к существующей игре
-                    players.player2 = { id: playerId, name: playerName, score: 0 };
-                    startGame();
-                }
-                
-                // Показываем количество "ожидающих" игроков (для демо)
-                setInterval(() => {
-                    queueCount = Math.floor(Math.random() * 10);
-                    playersCountElement.textContent = queueCount;
-                }, 2000);
-            }, 1500);
+            updateConnectionStatus("Ищем соперника...", "waiting");
         }
         
-        // Начать игру
-        function startGame() {
-            if (isHost) {
-                // Если мы хост, ждем второго игрока
-                setTimeout(() => {
-                    // Имитируем подключение второго игрока
-                    players.player2 = { 
-                        id: "demo-opponent", 
-                        name: "Соперник " + Math.floor(Math.random() * 100), 
-                        score: 0 
-                    };
-                    startGame();
-                }, 3000);
-                return;
-            }
+        function rollDice() {
+            if (!currentGame || !currentGame.active) return;
             
-            // Обновляем UI
+            socket.send(JSON.stringify({
+                type: 'ROLL',
+                gameId: currentGame.id
+            }));
+        }
+        
+        function startNewGame() {
+            if (!currentGame) return;
+            
+            socket.send(JSON.stringify({
+                type: 'NEW_GAME',
+                gameId: currentGame.id
+            }));
+        }
+        
+        function leaveGame() {
+            resetToLobby();
+        }
+        
+        function handleMessage(data) {
+            switch (data.type) {
+                case 'REGISTERED':
+                    playerId = data.playerId;
+                    break;
+                    
+                case 'WAITING':
+                    updateConnectionStatus("Ожидаем второго игрока...", "waiting");
+                    break;
+                    
+                case 'GAME_UPDATE':
+                    currentGame = data.game;
+                    playerIndex = data.yourIndex;
+                    updateGameUI();
+                    break;
+                    
+                case 'OPPONENT_DISCONNECTED':
+                    alert("Соперник отключился!");
+                    resetToLobby();
+                    break;
+            }
+        }
+        
+        function updateGameUI() {
+            if (!currentGame) return;
+            
+            // Показываем игровой интерфейс
             lobby.style.display = "none";
             gameContent.style.display = "block";
             
-            // Устанавливаем имена игроков
-            document.getElementById('player1Name').textContent = players.player1?.name || "Игрок 1";
-            document.getElementById('player2Name').textContent = players.player2?.name || "Игрок 2";
-            document.getElementById('player1NameShort').textContent = players.player1?.name || "Игрок 1";
-            document.getElementById('player2NameShort').textContent = players.player2?.name || "Игрок 2";
+            // Обновляем информацию об игроках
+            document.getElementById('player1Name').textContent = currentGame.player1.name;
+            document.getElementById('player2Name').textContent = currentGame.player2.name;
             
-            // Начинаем игру
-            currentPlayerTurn = players.player1.id;
-            gameActive = true;
-            updateConnectionStatus("Игра началась!", true);
-            addToHistory(`Игра началась! Первым ходит ${players.player1.name}`);
+            // Обновляем кубики и счет
+            document.getElementById('dice1').textContent = currentGame.player1.dice;
+            document.getElementById('dice2').textContent = currentGame.player2.dice;
+            document.getElementById('score1').textContent = currentGame.player1.score;
+            document.getElementById('score2').textContent = currentGame.player2.score;
             
-            // Обновляем кнопки
-            updateButtons();
-        }
-        
-        // Бросок костей
-        function rollDice(playerType) {
-            if (!gameActive) return;
+            // Обновляем статистику побед
+            document.getElementById('player1Wins').textContent = currentGame.player1.wins;
+            document.getElementById('player2Wins').textContent = currentGame.player2.wins;
             
-            const roll1 = Math.floor(Math.random() * 6) + 1;
-            const roll2 = Math.floor(Math.random() * 6) + 1;
-            const total = roll1 + roll2;
+            // Обновляем кнопки броска
+            document.getElementById('roll1').disabled = 
+                !currentGame.active || 
+                currentGame.currentPlayer !== currentGame.player1.id ||
+                playerIndex !== 0;
+                
+            document.getElementById('roll2').disabled = 
+                !currentGame.active || 
+                currentGame.currentPlayer !== currentGame.player2.id ||
+                playerIndex !== 1;
             
-            // Эмодзи костей (1-6)
-            const diceEmojis = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
-            const diceResult = diceEmojis[roll1 - 1] + diceEmojis[roll2 - 1];
+            // Обновляем историю
+            const historyLog = document.getElementById('historyLog');
+            historyLog.innerHTML = "";
+            currentGame.history.forEach(msg => {
+                const entry = document.createElement('p');
+                entry.textContent = msg;
+                historyLog.appendChild(entry);
+            });
             
-            // Обновляем кубики
-            document.querySelector(`#${playerType} .dice`).textContent = diceResult;
-            
-            // Добавляем очки
-            if (playerType === 'player1') {
-                scores.player1 += total;
-                document.getElementById('score1').textContent = scores.player1;
+            // Обновляем статус подключения
+            if (currentGame.active) {
+                const isYourTurn = (playerIndex === 0 && currentGame.currentPlayer === currentGame.player1.id) ||
+                                  (playerIndex === 1 && currentGame.currentPlayer === currentGame.player2.id);
+                
+                updateConnectionStatus(
+                    isYourTurn ? "Ваш ход!" : "Ход соперника",
+                    isYourTurn ? "connected" : "waiting"
+                );
             } else {
-                scores.player2 += total;
-                document.getElementById('score2').textContent = scores.player2;
-            }
-            
-            // Проверяем победу
-            const newScore = playerType === 'player1' ? scores.player1 : scores.player2;
-            if (newScore >= 50) {
-                gameActive = false;
-                if (playerType === 'player1') {
-                    wins.player1++;
-                    document.getElementById('wins1').textContent = wins.player1;
-                } else {
-                    wins.player2++;
-                    document.getElementById('wins2').textContent = wins.player2;
-                }
-                
-                // Добавляем сообщение в историю
-                const winnerName = playerType === 'player1' ? players.player1.name : players.player2.name;
-                addToHistory(`🎉 ${winnerName} побеждает с ${newScore} очками!`);
-            } else {
-                // Передаем ход другому игроку
-                currentPlayerTurn = playerType === 'player1' ? players.player2.id : players.player1.id;
-                
-                // Добавляем сообщение в историю
-                const playerName = playerType === 'player1' ? players.player1.name : players.player2.name;
-                addToHistory(`${playerName} выбросил ${roll1} и ${roll2} (всего ${total})`);
-                
-                // Обновляем кнопки
-                updateButtons();
+                updateConnectionStatus("Игра завершена", "disconnected");
             }
         }
         
-        // Начать новую игру
-        function startNewGame() {
-            // Сбрасываем счет
-            scores = { player1: 0, player2: 0 };
-            document.getElementById('score1').textContent = "0";
-            document.getElementById('score2').textContent = "0";
-            
-            // Сбрасываем кубики
-            document.querySelector('#player1 .dice').textContent = "🎲";
-            document.querySelector('#player2 .dice').textContent = "🎲";
-            
-            // Начинаем игру
-            currentPlayerTurn = players.player1.id;
-            gameActive = true;
-            
-            // Добавляем сообщение в историю
-            addToHistory(`Начата новая игра! Первым ходит ${players.player1.name}`);
-            
-            // Обновляем кнопки
-            updateButtons();
-        }
-        
-        // Покинуть игру
-        function leaveGame() {
-            // Сбрасываем состояние
-            resetGame();
-            
-            // Возвращаемся в лобби
+        function resetToLobby() {
             lobby.style.display = "block";
             gameContent.style.display = "none";
             updateConnectionStatus("Не подключено");
+            currentGame = null;
+            playerIndex = null;
         }
         
-        // Сбросить игру
-        function resetGame() {
-            scores = { player1: 0, player2: 0 };
-            players = { player1: null, player2: null };
-            gameActive = false;
-            currentPlayerTurn = "";
-            document.getElementById('historyLog').innerHTML = "";
-        }
-        
-        // Добавить сообщение в историю
-        function addToHistory(message) {
-            const entry = document.createElement('p');
-            entry.textContent = message;
-            document.getElementById('historyLog').prepend(entry);
-        }
-        
-        // Обновить статус подключения
-        function updateConnectionStatus(message, isConnected = false) {
+        function updateConnectionStatus(message, status = "") {
             connectionStatus.textContent = message;
-            connectionStatus.className = "connection-status " + (isConnected ? "connected" : "waiting");
+            connectionStatus.className = "connection-status " + status;
         }
-        
-        // Обновить кнопки броска
-        function updateButtons() {
-            document.getElementById('roll1').disabled = 
-                currentPlayerTurn !== playerId || 
-                playerId !== players.player1?.id || 
-                !gameActive;
-            
-            document.getElementById('roll2').disabled = 
-                currentPlayerTurn !== playerId || 
-                playerId !== players.player2?.id || 
-                !gameActive;
-        }
-        
-        // Имитация WebSocket (для демо)
-        function simulateWebSocket() {
-            setInterval(() => {
-                if (gameActive && !isHost && Math.random() > 0.7) {
-                    // Имитируем ход противника
-                    setTimeout(() => {
-                        if (gameActive && currentPlayerTurn !== playerId) {
-                            rollDice(players.player1.id === playerId ? 'player2' : 'player1');
-                        }
-                    }, 1000 + Math.random() * 2000);
-                }
-            }, 3000);
-        }
-        
-        // Запускаем имитацию WebSocket
-        simulateWebSocket();
     </script>
 </body>
 </html>
