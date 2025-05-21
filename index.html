@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎲 Авто-казино для друзей</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #1a1a2e;
+            color: white;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #16213e;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+        
+        h1 {
+            color: #f9c74f;
+            margin-bottom: 30px;
+        }
+        
+        .game-area {
+            display: flex;
+            justify-content: space-around;
+            margin: 30px 0;
+            flex-wrap: wrap;
+        }
+        
+        .player {
+            background-color: #0f3460;
+            padding: 20px;
+            border-radius: 8px;
+            width: 45%;
+            margin-bottom: 20px;
+        }
+        
+        .dice {
+            font-size: 80px;
+            margin: 20px 0;
+        }
+        
+        button {
+            background-color: #4cc9f0;
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            font-size: 18px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            background-color: #4361ee;
+            transform: scale(1.05);
+        }
+        
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        .scoreboard {
+            background-color: #0f3460;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        
+        .score {
+            font-size: 24px;
+            font-weight: bold;
+            color: #f9c74f;
+        }
+        
+        .history {
+            margin-top: 30px;
+            background-color: #0f3460;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        
+        #historyLog {
+            max-height: 200px;
+            overflow-y: auto;
+            text-align: left;
+            padding: 10px;
+        }
+        
+        .lobby {
+            margin-bottom: 30px;
+        }
+        
+        input {
+            padding: 10px;
+            font-size: 16px;
+            border-radius: 5px;
+            border: none;
+            margin-right: 10px;
+        }
+        
+        .connection-status {
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        
+        .connected {
+            color: #4ade80;
+        }
+        
+        .waiting {
+            color: #fbbf24;
+        }
+        
+        #waitingPlayers {
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎲 Авто-казино для друзей</h1>
+        
+        <div class="lobby" id="lobby">
+            <input type="text" id="playerName" placeholder="Ваше имя">
+            <button id="joinQueue">Найти игру</button>
+            <div id="connectionStatus" class="connection-status">Не подключено</div>
+            <div id="waitingPlayers">Ожидающих игроков: <span id="playersCount">0</span></div>
+        </div>
+        
+        <div id="gameContent" style="display: none;">
+            <div class="game-area">
+                <div class="player" id="player1">
+                    <h2 id="player1Name">Игрок 1</h2>
+                    <div class="dice">🎲</div>
+                    <p>Очки: <span class="score" id="score1">0</span></p>
+                    <button id="roll1">Бросить кости</button>
+                </div>
+                
+                <div class="player" id="player2">
+                    <h2 id="player2Name">Игрок 2</h2>
+                    <div class="dice">🎲</div>
+                    <p>Очки: <span class="score" id="score2">0</span></p>
+                    <button id="roll2">Бросить кости</button>
+                </div>
+            </div>
+            
+            <div class="scoreboard">
+                <h2>Статистика</h2>
+                <p>Побед: <span id="player1NameShort"></span> - <span id="wins1">0</span> | 
+                <span id="player2NameShort"></span> - <span id="wins2">0</span></p>
+                <button id="newGame">Новая игра</button>
+                <button id="leaveGame">Покинуть игру</button>
+            </div>
+            
+            <div class="history">
+                <h2>История игр</h2>
+                <div id="historyLog"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Игровые переменные
+        let playerId = Math.random().toString(36).substr(2, 9);
+        let playerName = "";
+        let gameId = "";
+        let isHost = false;
+        let currentPlayerTurn = "";
+        let gameActive = false;
+        let scores = { player1: 0, player2: 0 };
+        let wins = { player1: 0, player2: 0 };
+        let players = { player1: null, player2: null };
+        let socket = null;
+        let queueCount = 0;
+        
+        // Элементы DOM
+        const playerNameInput = document.getElementById('playerName');
+        const joinQueueBtn = document.getElementById('joinQueue');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const gameContent = document.getElementById('gameContent');
+        const lobby = document.getElementById('lobby');
+        const playersCountElement = document.getElementById('playersCount');
+        
+        // Слушатели событий
+        joinQueueBtn.addEventListener('click', joinQueue);
+        document.getElementById('roll1').addEventListener('click', () => rollDice('player1'));
+        document.getElementById('roll2').addEventListener('click', () => rollDice('player2'));
+        document.getElementById('newGame').addEventListener('click', startNewGame);
+        document.getElementById('leaveGame').addEventListener('click', leaveGame);
+        
+        // Подключиться к очереди
+        function joinQueue() {
+            playerName = playerNameInput.value.trim() || "Игрок " + Math.floor(Math.random() * 100);
+            
+            // Имитируем подключение к серверу
+            updateConnectionStatus("Ищем соперника...", false);
+            
+            // В реальной реализации здесь было бы WebSocket подключение
+            // Для демонстрации используем setTimeout
+            setTimeout(() => {
+                // 50% шанс стать хостом
+                isHost = Math.random() > 0.5;
+                gameId = "demo-" + Math.random().toString(36).substr(2, 6);
+                
+                if (isHost) {
+                    // Создаем новую игру
+                    players.player1 = { id: playerId, name: playerName, score: 0 };
+                    updateConnectionStatus("Ожидаем второго игрока...", false);
+                } else {
+                    // Присоединяемся к существующей игре
+                    players.player2 = { id: playerId, name: playerName, score: 0 };
+                    startGame();
+                }
+                
+                // Показываем количество "ожидающих" игроков (для демо)
+                setInterval(() => {
+                    queueCount = Math.floor(Math.random() * 10);
+                    playersCountElement.textContent = queueCount;
+                }, 2000);
+            }, 1500);
+        }
+        
+        // Начать игру
+        function startGame() {
+            if (isHost) {
+                // Если мы хост, ждем второго игрока
+                setTimeout(() => {
+                    // Имитируем подключение второго игрока
+                    players.player2 = { 
+                        id: "demo-opponent", 
+                        name: "Соперник " + Math.floor(Math.random() * 100), 
+                        score: 0 
+                    };
+                    startGame();
+                }, 3000);
+                return;
+            }
+            
+            // Обновляем UI
+            lobby.style.display = "none";
+            gameContent.style.display = "block";
+            
+            // Устанавливаем имена игроков
+            document.getElementById('player1Name').textContent = players.player1?.name || "Игрок 1";
+            document.getElementById('player2Name').textContent = players.player2?.name || "Игрок 2";
+            document.getElementById('player1NameShort').textContent = players.player1?.name || "Игрок 1";
+            document.getElementById('player2NameShort').textContent = players.player2?.name || "Игрок 2";
+            
+            // Начинаем игру
+            currentPlayerTurn = players.player1.id;
+            gameActive = true;
+            updateConnectionStatus("Игра началась!", true);
+            addToHistory(`Игра началась! Первым ходит ${players.player1.name}`);
+            
+            // Обновляем кнопки
+            updateButtons();
+        }
+        
+        // Бросок костей
+        function rollDice(playerType) {
+            if (!gameActive) return;
+            
+            const roll1 = Math.floor(Math.random() * 6) + 1;
+            const roll2 = Math.floor(Math.random() * 6) + 1;
+            const total = roll1 + roll2;
+            
+            // Эмодзи костей (1-6)
+            const diceEmojis = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+            const diceResult = diceEmojis[roll1 - 1] + diceEmojis[roll2 - 1];
+            
+            // Обновляем кубики
+            document.querySelector(`#${playerType} .dice`).textContent = diceResult;
+            
+            // Добавляем очки
+            if (playerType === 'player1') {
+                scores.player1 += total;
+                document.getElementById('score1').textContent = scores.player1;
+            } else {
+                scores.player2 += total;
+                document.getElementById('score2').textContent = scores.player2;
+            }
+            
+            // Проверяем победу
+            const newScore = playerType === 'player1' ? scores.player1 : scores.player2;
+            if (newScore >= 50) {
+                gameActive = false;
+                if (playerType === 'player1') {
+                    wins.player1++;
+                    document.getElementById('wins1').textContent = wins.player1;
+                } else {
+                    wins.player2++;
+                    document.getElementById('wins2').textContent = wins.player2;
+                }
+                
+                // Добавляем сообщение в историю
+                const winnerName = playerType === 'player1' ? players.player1.name : players.player2.name;
+                addToHistory(`🎉 ${winnerName} побеждает с ${newScore} очками!`);
+            } else {
+                // Передаем ход другому игроку
+                currentPlayerTurn = playerType === 'player1' ? players.player2.id : players.player1.id;
+                
+                // Добавляем сообщение в историю
+                const playerName = playerType === 'player1' ? players.player1.name : players.player2.name;
+                addToHistory(`${playerName} выбросил ${roll1} и ${roll2} (всего ${total})`);
+                
+                // Обновляем кнопки
+                updateButtons();
+            }
+        }
+        
+        // Начать новую игру
+        function startNewGame() {
+            // Сбрасываем счет
+            scores = { player1: 0, player2: 0 };
+            document.getElementById('score1').textContent = "0";
+            document.getElementById('score2').textContent = "0";
+            
+            // Сбрасываем кубики
+            document.querySelector('#player1 .dice').textContent = "🎲";
+            document.querySelector('#player2 .dice').textContent = "🎲";
+            
+            // Начинаем игру
+            currentPlayerTurn = players.player1.id;
+            gameActive = true;
+            
+            // Добавляем сообщение в историю
+            addToHistory(`Начата новая игра! Первым ходит ${players.player1.name}`);
+            
+            // Обновляем кнопки
+            updateButtons();
+        }
+        
+        // Покинуть игру
+        function leaveGame() {
+            // Сбрасываем состояние
+            resetGame();
+            
+            // Возвращаемся в лобби
+            lobby.style.display = "block";
+            gameContent.style.display = "none";
+            updateConnectionStatus("Не подключено");
+        }
+        
+        // Сбросить игру
+        function resetGame() {
+            scores = { player1: 0, player2: 0 };
+            players = { player1: null, player2: null };
+            gameActive = false;
+            currentPlayerTurn = "";
+            document.getElementById('historyLog').innerHTML = "";
+        }
+        
+        // Добавить сообщение в историю
+        function addToHistory(message) {
+            const entry = document.createElement('p');
+            entry.textContent = message;
+            document.getElementById('historyLog').prepend(entry);
+        }
+        
+        // Обновить статус подключения
+        function updateConnectionStatus(message, isConnected = false) {
+            connectionStatus.textContent = message;
+            connectionStatus.className = "connection-status " + (isConnected ? "connected" : "waiting");
+        }
+        
+        // Обновить кнопки броска
+        function updateButtons() {
+            document.getElementById('roll1').disabled = 
+                currentPlayerTurn !== playerId || 
+                playerId !== players.player1?.id || 
+                !gameActive;
+            
+            document.getElementById('roll2').disabled = 
+                currentPlayerTurn !== playerId || 
+                playerId !== players.player2?.id || 
+                !gameActive;
+        }
+        
+        // Имитация WebSocket (для демо)
+        function simulateWebSocket() {
+            setInterval(() => {
+                if (gameActive && !isHost && Math.random() > 0.7) {
+                    // Имитируем ход противника
+                    setTimeout(() => {
+                        if (gameActive && currentPlayerTurn !== playerId) {
+                            rollDice(players.player1.id === playerId ? 'player2' : 'player1');
+                        }
+                    }, 1000 + Math.random() * 2000);
+                }
+            }, 3000);
+        }
+        
+        // Запускаем имитацию WebSocket
+        simulateWebSocket();
+    </script>
+</body>
+</html>
